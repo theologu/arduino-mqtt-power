@@ -13,32 +13,44 @@ boolean inetOK;
 int RelayPin = 3;    // RELAY connected to digital pin 3
 int sensorIn = A5; //Current sensor connected to analog pin 5
 int FloodPin = 4;
+int cnt = 0;
+int isup = 0;
+boolean fault = false;
 ACS712 sensor(ACS712_20A, A0);
 
 void callback(char* topic, byte* payload, unsigned int length);
 
 //Edit this to match your mqtt setup
-#define MQTT_SERVER "10.0.0.240" 
-#define MQTT_USER "berceni"
-#define MQTT_PASS "xxxxxxxx" 
+#define MQTT_SERVER "gw.example.ro" 
+#define MQTT_USER "ssss"
+#define MQTT_PASS "1234" 
 
 //Edit this for dht sensor
 #define DHTPIN 2
 #define DHTTYPE DHT22 
 DHT dht(DHTPIN, DHTTYPE);
+unsigned long SISinterval = 7200000;  
+unsigned long noLoadTime = 0;
+unsigned long loadTime = 0;
+unsigned long partTime = 0;
+unsigned long onTime = 0;
+unsigned long totalTime = 0;
+unsigned long OnDelay = 2000;
+unsigned long OffDelay = 2000;
+unsigned long lastRead = 0;
+float upTime = 0;
 
-
-byte mac[]    = { 0x76, 0xE6, 0xBE, 0xEF, 0x8C, 0xEE };  
+byte mac[]    = { 0x41, 0x22, 0x00, 0x60, 0x4B, 0x08 };  
 
 // Unique static IP address of this Arduino - change to adapt to your network
-IPAddress dnServer(8, 8, 8, 8);
+IPAddress dnServer(10, 10, 10, 254);
 // the router's gateway address:
-IPAddress gateway(172, 16, 0, 1);
+IPAddress gateway(10, 10, 10, 254);
 // the subnet:
 IPAddress subnet(255, 255, 255, 0);
 
 //the IP address is dependent on your network
-IPAddress ip(172, 16, 0, 228);
+IPAddress ip(10, 10, 10, 206);
 
 //PIN for Local command trigger
 
@@ -48,6 +60,8 @@ char const* beciTopic2 = "/beci/temp/";
 char const* beciTopic3 = "/beci/hum/";
 char const* beciTopic4 = "/beci/flood/";
 char const* beciTopic5 = "/beci/hidropwr/";
+char const* beciTopic6 = "/beci/hidropwrup/";
+char const* beciTopic7 = "/beci/hidrofault/";
 
 EthernetClient ethClient;
 PubSubClient client(MQTT_SERVER, 1883, callback, ethClient);
@@ -63,11 +77,11 @@ digitalWrite(7, HIGH);  //set line high and now ignore pin the rest of the time
   //start the serial line for debugging
 Serial.begin(9600);
 dht.begin();
-Serial.println("Calibrating... Ensure that no current flows through the sensor at this moment");
+//Serial.println("Calibrating... Ensure that no current flows through the sensor at this moment");
 pinMode(RelayPin,OUTPUT);
 digitalWrite(RelayPin, HIGH);
 sensor.calibrate();
-  Serial.println("Done!");
+//  Serial.println("Done!");
 
 delay (3000);
 digitalWrite(RelayPin, LOW);
@@ -105,8 +119,63 @@ float I = sensor.getCurrentAC();
 float P = U * I;
 
 //  Serial.println(String("I = ") + I + " A");
- // Serial.println(String("P = ") + P + " Watts");
+//Serial.println(String("P = ") + P + " Watts");
 //
+unsigned long currentMillis = millis();
+
+if(P < 100) {
+noLoadTime = millis();
+if ((noLoadTime - loadTime) >= OffDelay && cnt==2) { // If power is lower than 100W longer than 2 seconds
+//  Serial.println(String("P = ") + P + " Watts");
+//  Serial.println("Bucla lowpower\n");
+//  Serial.println("total time before:");
+//  Serial.println(totalTime);
+//  Serial.println("lowpower time\n");
+//  Serial.println(noLoadTime);
+//  Serial.println("highpower time\n");
+//  Serial.println(loadTime);
+  partTime = noLoadTime - onTime;
+//  Serial.println("parttime:\n");
+//  Serial.println(partTime);
+  totalTime = totalTime + partTime;
+//  Serial.println("total time:");
+//  Serial.println(totalTime);
+//  Serial.println("\n");
+  cnt = 0;
+}
+
+//Serial.println("\tmai mic:");
+
+}
+
+if(P > 100) {
+if (cnt==0){
+onTime = millis();
+cnt = 2;
+}
+loadTime = millis();
+//if water pump is continuously on for more than 15 minutes, cut the power 
+if ((loadTime - onTime) > 900000) {
+fault = true;
+digitalWrite(RelayPin, HIGH);
+}  
+
+//Serial.println("\tmai mare:"); 
+}
+
+ 
+  
+if ((millis() - lastRead) >= SISinterval){  //how much was the powerON in the SISinterval(2h)
+if ( cnt == 2 ) {
+partTime = loadTime - onTime;
+totalTime = totalTime + partTime;
+cnt = 0;
+}
+upTime = totalTime / SISinterval; 
+totalTime = 0;
+lastRead = millis();
+isup = 1;
+}
 
 if (inetOK) { 
 //check every 10 minutes if we are still connected to the network  
@@ -133,6 +202,12 @@ if ( (mqttupdate - tellstate) > 15000 ) {
 if ( digitalRead(FloodPin) == HIGH ) {
       client.publish("/beci/flood/","1");
     }
+    if ( fault ) {
+       client.publish("/beci/hidrofault/","1");
+    }
+    else {
+      client.publish("/beci/hidrofault/","0");
+    }
     float h = dht.readHumidity();
     // Read temperature in Celcius
 float t = dht.readTemperature();
@@ -143,6 +218,10 @@ Serial.println("KO, Please check DHT sensor !");
     client.publish(beciTopic2, String(t).c_str(), true);   
     client.publish(beciTopic3, String(h).c_str(), true);
     client.publish(beciTopic5, String(P).c_str(), true);
+    if (isup==1) {
+    client.publish(beciTopic6, String(upTime).c_str(), true);
+    isup = 0;
+    }
     tellstate = millis();
    
   }
@@ -189,25 +268,12 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
 void inetInit()
 {
-//Ethernet.linkStatus() available only for W5200 and W5500
- if (Ethernet.linkStatus() == LinkOFF) {
-    Serial.println("Ethernet cable is not connected. \n");
-  }
-  if (Ethernet.linkStatus() == LinkON) {
-    Serial.println("Ethernet cable is connected. \n");
-  }
-  if (Ethernet.hardwareStatus() == EthernetNoHardware) {
-    Serial.println("Ethernet shield was not found.");
-  }
-  else if (Ethernet.hardwareStatus() == EthernetW5100) {
+
+  if (Ethernet.hardwareStatus() == EthernetW5100) {
     Serial.println("W5100 Ethernet controller detected.\n");
   }
-  else if (Ethernet.hardwareStatus() == EthernetW5200) {
-    Serial.println("W5200 Ethernet controller detected.\n");
-  }
-  else if (Ethernet.hardwareStatus() == EthernetW5500) {
-    Serial.println("W5500 Ethernet controller detected.\n");
-  }
+  
+  
   Serial.print("\tCalling Inet INIT: \n");
   Ethernet.begin(mac, ip, dnServer, gateway, subnet);
   
@@ -217,7 +283,7 @@ void inetInit()
   delay(50);
 
 
- if (ethClient.connect(gateway, 80)) 
+ if (ethClient.connect(gateway, 22)) 
   {
 inetOK = true;
 Serial.print("inet OK\n");
@@ -239,7 +305,7 @@ void inetCheck()
 Serial.print("\tCalling Inet Check: \n");
 
 ethClient.stop();
-if (ethClient.connect(gateway, 80)) 
+if (ethClient.connect(gateway, 22)) 
   {
 Serial.println("Server is reachable\n");
 inetOK = true;
@@ -277,7 +343,6 @@ ethClient.stop();
     }
  
   }
-
 
 
 
