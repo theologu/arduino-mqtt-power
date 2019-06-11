@@ -11,7 +11,10 @@ This setup I use to monitor my basement environment and also control the water p
 
 More automation and logic can be done on Home Assistant side.
 
+Relay:
 ![relay](relay.png?raw=true "Title")
+
+ACS712 sensor:
 ![relay](acs712.png?raw=true "Title")
 
 
