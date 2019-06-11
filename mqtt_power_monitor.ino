@@ -12,7 +12,7 @@ long tellstate = 0;
 boolean inetOK;
 int RelayPin = 3;    // RELAY connected to digital pin 3
 int sensorIn = A5; //Current sensor connected to analog pin 5
-int FloodPin = 4;
+int FloodPin = 4; //Flood sensor connected to digital pin 4
 int cnt = 0;
 int isup = 0;
 boolean fault = false;
@@ -52,7 +52,7 @@ IPAddress subnet(255, 255, 255, 0);
 //the IP address is dependent on your network
 IPAddress ip(10, 10, 10, 206);
 
-//PIN for Local command trigger
+
 
 
 char const* beciTopic1 = "/beci/RB1/";
@@ -69,6 +69,7 @@ PubSubClient client(MQTT_SERVER, 1883, callback, ethClient);
 
 void setup() {
 delay(500);             //wait for voltage to stabilize
+//in my setup, the w5100 needs a reset after power-up, so I used pin 7 of arduino nano connected to the reset pin of the w5100 to reset it
 pinMode(7, OUTPUT);   //pin connected to w5100 shield's reset
 digitalWrite(7, LOW);  //pull line low for 100ms to reset ethernet shield
 delay(100);
@@ -126,25 +127,14 @@ unsigned long currentMillis = millis();
 if(P < 100) {
 noLoadTime = millis();
 if ((noLoadTime - loadTime) >= OffDelay && cnt==2) { // If power is lower than 100W longer than 2 seconds
-//  Serial.println(String("P = ") + P + " Watts");
-//  Serial.println("Bucla lowpower\n");
-//  Serial.println("total time before:");
-//  Serial.println(totalTime);
-//  Serial.println("lowpower time\n");
-//  Serial.println(noLoadTime);
-//  Serial.println("highpower time\n");
-//  Serial.println(loadTime);
+
   partTime = noLoadTime - onTime;
-//  Serial.println("parttime:\n");
-//  Serial.println(partTime);
+
   totalTime = totalTime + partTime;
-//  Serial.println("total time:");
-//  Serial.println(totalTime);
-//  Serial.println("\n");
+
   cnt = 0;
 }
 
-//Serial.println("\tmai mic:");
 
 }
 
@@ -154,13 +144,13 @@ onTime = millis();
 cnt = 2;
 }
 loadTime = millis();
-//if water pump is continuously on for more than 15 minutes, cut the power 
-if ((loadTime - onTime) > 900000) {
+//if water pump is continuously on for more than 10 minutes, cut the power 
+if ((loadTime - onTime) > 600000) {
 fault = true;
 digitalWrite(RelayPin, HIGH);
 }  
 
-//Serial.println("\tmai mare:"); 
+ 
 }
 
  
@@ -171,7 +161,7 @@ partTime = loadTime - onTime;
 totalTime = totalTime + partTime;
 cnt = 0;
 }
-upTime = totalTime / SISinterval; 
+upTime = totalTime; //we will send the upTime as milliseconds to the mqtt controller for a visual display or for automations
 totalTime = 0;
 lastRead = millis();
 isup = 1;
@@ -305,16 +295,17 @@ void inetCheck()
 Serial.print("\tCalling Inet Check: \n");
 
 ethClient.stop();
+// here we check if we are able to connect to the gateway IP on a specific port; adjust to fit your setup.
 if (ethClient.connect(gateway, 22)) 
   {
-Serial.println("Server is reachable\n");
+Serial.println("Network is functional\n");
 inetOK = true;
 lastinetupdate = millis();
 reconnect();
   }
   else
   {
-Serial.println("Server is NOT reachable\n");
+Serial.println("Network is NOT functional\n");
 inetOK = false;
   }
 }
